@@ -1,11 +1,8 @@
 import React, { useState } from "react";
-import LandingPage from "./components/LandingPage";
 import Dashboard from "./components/Dashboard";
-import { Home, BarChart3 } from "lucide-react";
 
 export default function App() {
-  // Shared app-level state
-  const [activeTab, setActiveTab] = useState("home");
+  const [activeView, setActiveView] = useState("heatmap");
   const [selectedMetric, setSelectedMetric] = useState("pm25");
   const [filters, setFilters] = useState({
     country: "US",
@@ -17,54 +14,45 @@ export default function App() {
   const [reflection, setReflection] = useState("");
 
   return (
-    <div className="min-h-screen bg-gray-50 relative pb-20">
-      {/* Dynamic content */}
-      <div className="pb-20">
-        {activeTab === "home" ? (
-          <LandingPage
-            selectedMetric={selectedMetric}
-            setSelectedMetric={setSelectedMetric}
-            reflection={reflection}
-            setReflection={setReflection}
-          />
-        ) : (
-          <Dashboard
-            selectedMetric={selectedMetric}
-            setSelectedMetric={setSelectedMetric}
-            filters={filters}
-            setFilters={setFilters}
-            reflection={reflection}
-            setReflection={setReflection}
-          />
-        )}
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* Main Navigation Header */}
+      <nav className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="flex items-center justify-between h-20">
+            {/* Logo and Brand */}
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-gray-900 tracking-tight">
+                AIR <span className="font-normal">@</span>TAMGU
+              </h1>
+            </div>
 
-      {/* Bottom navigation bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-gray-200 shadow-md flex justify-around py-3">
-        <button
-          onClick={() => setActiveTab("home")}
-          className={`flex flex-col items-center text-xs font-medium transition-all ${
-            activeTab === "home"
-              ? "text-blue-600 scale-105"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Home className="w-5 h-5 mb-1" />
-          Home
-        </button>
+            {/* User Info */}
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-sm font-medium text-gray-900">{filters.studentId}</p>
+                <p className="text-xs text-gray-500">{filters.school} - Group {filters.group.replace('G', '')}</p>
+              </div>
+              <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center">
+                <span className="text-white text-sm font-semibold">{filters.studentId.slice(3)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </nav>
 
-        <button
-          onClick={() => setActiveTab("dashboard")}
-          className={`flex flex-col items-center text-xs font-medium transition-all ${
-            activeTab === "dashboard"
-              ? "text-blue-600 scale-105"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <BarChart3 className="w-5 h-5 mb-1" />
-          Dashboard
-        </button>
-      </div>
+      {/* Main Content */}
+      <Dashboard
+        activeView={activeView}
+        setActiveView={setActiveView}
+        selectedMetric={selectedMetric}
+        setSelectedMetric={setSelectedMetric}
+        filters={filters}
+        setFilters={setFilters}
+        reflection={reflection}
+        setReflection={setReflection}
+      />
     </div>
   );
 }
+
+
