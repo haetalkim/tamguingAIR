@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/tamguingAIR/static/css/main.307b3b78.css",
-    "main.js": "/tamguingAIR/static/js/main.2dfa3b1b.js",
-    "static/js/453.cfbcad0a.chunk.js": "/tamguingAIR/static/js/453.cfbcad0a.chunk.js",
-    "index.html": "/tamguingAIR/index.html",
-    "main.307b3b78.css.map": "/tamguingAIR/static/css/main.307b3b78.css.map",
-    "main.2dfa3b1b.js.map": "/tamguingAIR/static/js/main.2dfa3b1b.js.map",
-    "453.cfbcad0a.chunk.js.map": "/tamguingAIR/static/js/453.cfbcad0a.chunk.js.map"
+    "main.css": "/tamgu/static/css/main.f9d7c101.css",
+    "main.js": "/tamgu/static/js/main.c34b7ff4.js",
+    "static/js/453.cfbcad0a.chunk.js": "/tamgu/static/js/453.cfbcad0a.chunk.js",
+    "index.html": "/tamgu/index.html",
+    "main.f9d7c101.css.map": "/tamgu/static/css/main.f9d7c101.css.map",
+    "main.c34b7ff4.js.map": "/tamgu/static/js/main.c34b7ff4.js.map",
+    "453.cfbcad0a.chunk.js.map": "/tamgu/static/js/453.cfbcad0a.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.307b3b78.css",
-    "static/js/main.2dfa3b1b.js"
+    "static/css/main.f9d7c101.css",
+    "static/js/main.c34b7ff4.js"
   ]
 }
