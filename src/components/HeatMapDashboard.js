@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { Info, ZoomIn, ZoomOut, Maximize2, Download, Share2 } from 'lucide-react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
+import { Info, Download, Share2 } from 'lucide-react';
+import { GoogleMap, LoadScript, HeatmapLayer } from '@react-google-maps/api';
+import html2canvas from 'html2canvas';
 
 const AQI_RANGES = {
   pm25: [
@@ -37,6 +39,31 @@ const LOCATIONS = [
   { id: 6, name: 'Greenwich Village', lat: 40.7336, lng: -74.0027, pm25: 15, co: 0.5, temp: 69, humidity: 48 },
   { id: 7, name: 'Lower Manhattan', lat: 40.7074, lng: -74.0113, pm25: 10, co: 0.4, temp: 68, humidity: 43 },
   { id: 8, name: 'East Village', lat: 40.7264, lng: -73.9818, pm25: 14, co: 0.5, temp: 69, humidity: 47 },
+];
+
+// Silver/desaturated map styling
+const mapStyles = [
+  { "elementType": "geometry", "stylers": [{ "color": "#f5f5f5" }] },
+  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
+  { "elementType": "labels.text.fill", "stylers": [{ "color": "#616161" }] },
+  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#f5f5f5" }] },
+  { "featureType": "poi", "elementType": "geometry", "stylers": [{ "color": "#eeeeee" }] },
+  { "featureType": "poi.park", "elementType": "geometry", "stylers": [{ "color": "#e5e5e5" }] },
+  { "featureType": "road", "elementType": "geometry", "stylers": [{ "color": "#ffffff" }] },
+  { "featureType": "road.arterial", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#dadada" }] },
+  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#c9c9c9" }] }
+];
+
+// Air quality gradient (Transparent -> Green -> Yellow -> Orange -> Red -> Purple -> Maroon)
+const heatmapGradient = [
+  'rgba(0, 255, 255, 0)',
+  'rgba(0, 228, 0, 1)',
+  'rgba(255, 255, 0, 1)',
+  'rgba(255, 126, 0, 1)',
+  'rgba(255, 0, 0, 1)',
+  'rgba(153, 0, 76, 1)',
+  'rgba(126, 0, 35, 1)'
 ];
 
 const StatusInfoModal = ({ isOpen, onClose, theme }) => {
@@ -103,10 +130,12 @@ const StatusInfoModal = ({ isOpen, onClose, theme }) => {
 };
 
 const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilters, theme, metricThemes }) => {
-  const [zoomLevel, setZoomLevel] = useState(1);
   const [showStatusInfo, setShowStatusInfo] = useState(false);
-  const [hoveredLocation, setHoveredLocation] = useState(null);
   const [selectedSession, setSelectedSession] = useState('latest');
+  const [map, setMap] = useState(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const screenshotRef = useRef(null);
 
   const sessions = [
     { id: 'latest', name: 'Latest Data' },
@@ -129,8 +158,164 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
     loc[selectedMetric] > worst[selectedMetric] ? loc : worst
   );
 
-  const handleZoomIn = () => setZoomLevel(Math.min(zoomLevel + 0.2, 2));
-  const handleZoomOut = () => setZoomLevel(Math.max(zoomLevel - 0.2, 0.6));
+  // Default center (Manhattan)
+  const mapCenter = useMemo(() => ({ lat: 40.7580, lng: -73.9855 }), []);
+
+  // Transform location data to WeightedLocation format for HeatmapLayer
+  const heatmapData = useMemo(() => {
+    if (!isLoaded || !window.google || !window.google.maps) {
+      return [];
+    }
+    return locations.map(location => {
+      const value = location[selectedMetric];
+      // Use the AQI value as weight - higher values create more intense heat
+      return {
+        location: new window.google.maps.LatLng(location.lat, location.lng),
+        weight: value
+      };
+    });
+  }, [locations, selectedMetric, isLoaded]);
+
+  // HeatmapLayer options
+  const heatmapOptions = useMemo(() => ({
+    radius: 40,
+    opacity: 0.7,
+    dissipating: true,
+    gradient: heatmapGradient
+  }), []);
+
+  const onMapLoad = useCallback((mapInstance) => {
+    setMap(mapInstance);
+    setIsLoaded(true);
+  }, []);
+
+  const onMapUnmount = useCallback(() => {
+    setMap(null);
+    setIsLoaded(false);
+  }, []);
+
+  const onLoadScriptLoad = useCallback(() => {
+    setIsLoaded(true);
+  }, []);
+
+  // Generate a code (e.g., session identifier)
+  const generateCode = useCallback(() => {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    return `${filters.school}-${filters.group}-${timestamp.toString(36).slice(-4).toUpperCase()}-${random}`;
+  }, [filters]);
+
+  // Capture screenshot with overlays
+  const handleShareScreenshot = useCallback(async () => {
+    if (!screenshotRef.current || isCapturing) return;
+    
+    setIsCapturing(true);
+    
+    try {
+      // Wait a bit for any animations to settle
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Capture the screenshot
+      const canvas = await html2canvas(screenshotRef.current, {
+        backgroundColor: '#f9fafb',
+        scale: 2, // Higher quality
+        logging: false,
+        useCORS: true,
+        allowTaint: true,
+      });
+      
+      // Create a new canvas for adding overlays
+      const finalCanvas = document.createElement('canvas');
+      finalCanvas.width = canvas.width;
+      finalCanvas.height = canvas.height + 90; // Extra space for overlay
+      const ctx = finalCanvas.getContext('2d');
+      
+      // Draw the original screenshot
+      ctx.drawImage(canvas, 0, 0);
+      
+      // Add overlay section at the bottom
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, canvas.height, finalCanvas.width, 90);
+      
+      // Add subtle shadow/border
+      ctx.strokeStyle = '#e5e7eb';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, canvas.height, finalCanvas.width, 90);
+      
+      // Add timestamp
+      const now = new Date();
+      const timestamp = now.toLocaleString('en-US', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+      
+      // Add group number
+      const groupNumber = filters.group || 'N/A';
+      
+      // Generate code
+      const code = generateCode();
+      
+      // Set text styles for labels
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '16px Arial, sans-serif';
+      const labelY = canvas.height + 28;
+      const valueY = canvas.height + 52;
+      const codeY = canvas.height + 76;
+      
+      // Draw labels and values
+      ctx.fillText('Timestamp:', 30, labelY);
+      ctx.fillStyle = '#1f2937';
+      ctx.font = 'bold 18px Arial, sans-serif';
+      ctx.fillText(timestamp, 140, labelY);
+      
+      // Draw group number
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '16px Arial, sans-serif';
+      ctx.fillText('Group:', 30, valueY);
+      ctx.fillStyle = '#1f2937';
+      ctx.font = 'bold 18px Arial, sans-serif';
+      ctx.fillText(groupNumber, 100, valueY);
+      
+      // Draw code (right aligned)
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '16px Arial, sans-serif';
+      const codeLabel = 'Code:';
+      const codeLabelWidth = ctx.measureText(codeLabel).width;
+      ctx.fillText(codeLabel, finalCanvas.width - 200, codeY);
+      
+      ctx.fillStyle = '#3b82f6';
+      ctx.font = 'bold 18px Arial, sans-serif';
+      ctx.fillText(code, finalCanvas.width - 200 + codeLabelWidth + 10, codeY);
+      
+      // Convert to blob and download
+      finalCanvas.toBlob((blob) => {
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `air-quality-heatmap-${now.toISOString().split('T')[0]}-${code}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+        setIsCapturing(false);
+      }, 'image/png');
+      
+    } catch (error) {
+      console.error('Error capturing screenshot:', error);
+      alert('Failed to capture screenshot. Please try again.');
+      setIsCapturing(false);
+    }
+  }, [filters, generateCode, isCapturing]);
+
+  // Get Google Maps API key from environment variable
+  const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || '';
 
   return (
     <div className="space-y-6">
@@ -142,11 +327,12 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
         </div>
         <div className="flex gap-2">
           <button 
-            onClick={() => navigator.clipboard.writeText(window.location.href)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all"
+            onClick={handleShareScreenshot}
+            disabled={isCapturing}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Share2 className="w-4 h-4" />
-            Share
+            {isCapturing ? 'Capturing...' : 'Share'}
           </button>
           <button 
             onClick={() => alert('Export functionality coming soon')}
@@ -158,16 +344,18 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
         </div>
       </div>
 
+      {/* Screenshot Container - includes metric selector and map/stats */}
+      <div ref={screenshotRef} className="space-y-6">
       {/* Metric Selector */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">Select Metric</h2>
-          <div className="flex items-center gap-3">
-            <label className="text-sm font-medium text-gray-700">View Session:</label>
+      <div className="bg-white rounded-xl p-4 shadow-lg border border-gray-200">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold text-gray-900">Select Metric</h2>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-700">View Session:</label>
             <select
               value={selectedSession}
               onChange={(e) => setSelectedSession(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               {sessions.map(session => (
                 <option key={session.id} value={session.id}>{session.name}</option>
@@ -175,19 +363,19 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
             </select>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           {Object.entries(metricThemes).map(([key, metric]) => (
             <button 
               key={key} 
               onClick={() => setSelectedMetric(key)}
-              className={`py-4 px-4 rounded-xl text-sm font-medium transition-all ${
+              className={`py-2.5 px-3 rounded-lg text-xs font-medium transition-all ${
                 selectedMetric === key 
-                  ? `${metric.bg} text-white shadow-lg scale-105` 
+                  ? `${metric.bg} text-white shadow-md scale-105` 
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              <div className="text-lg font-bold">{metric.label}</div>
-              <div className="text-xs opacity-90 mt-1">{metric.unit}</div>
+              <div className="text-sm font-bold">{metric.label}</div>
+              <div className="text-xs opacity-90 mt-0.5">{metric.unit}</div>
             </button>
           ))}
         </div>
@@ -199,219 +387,81 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
         <div className="lg:col-span-2 bg-white rounded-2xl p-6 shadow-lg border border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Manhattan Air Quality Map</h2>
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={handleZoomOut}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Zoom Out"
-              >
-                <ZoomOut className="w-5 h-5 text-gray-600" />
-              </button>
-              <button 
-                onClick={handleZoomIn}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-5 h-5 text-gray-600" />
-              </button>
-              <button 
-                onClick={() => setZoomLevel(1)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Reset View"
-              >
-                <Maximize2 className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
           </div>
           
-          {/* Map Container */}
-          <div className="relative bg-gradient-to-br from-blue-50 to-gray-50 rounded-xl overflow-hidden border-2 border-gray-200" style={{ height: '600px' }}>
-            <div 
-              className="w-full h-full transition-transform duration-300"
-              style={{ transform: `scale(${zoomLevel})` }}
-            >
-              <svg viewBox="0 0 400 800" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
-                {/* Water/Hudson River */}
-                <rect x="0" y="0" width="90" height="800" fill="#B3D9FF" opacity="0.3" />
-                <rect x="250" y="0" width="150" height="800" fill="#B3D9FF" opacity="0.3" />
-                
-                {/* Manhattan Island - more detailed */}
-                <path
-                  d="M 130 20 
-                     L 140 40 L 145 60 L 150 80 L 155 120 L 160 160
-                     L 165 200 L 170 240 L 175 280 L 180 320 L 185 360
-                     L 190 400 L 195 440 L 200 480 L 205 520 L 210 560
-                     L 215 600 L 220 640 L 222 680 L 220 720 L 215 750
-                     L 200 770 L 180 780 L 160 775 L 140 765 L 125 750
-                     L 115 720 L 110 680 L 105 640 L 100 600 L 95 560
-                     L 93 520 L 92 480 L 91 440 L 90 400 L 91 360
-                     L 93 320 L 95 280 L 98 240 L 102 200 L 106 160
-                     L 110 120 L 115 80 L 120 50 Z"
-                  fill="#FAFAFA"
-                  stroke="#D1D5DB"
-                  strokeWidth="2"
-                />
-                
-                {/* Street Grid Pattern */}
-                {Array.from({ length: 15 }).map((_, i) => (
-                  <line
-                    key={`h-${i}`}
-                    x1="90"
-                    y1={100 + i * 45}
-                    x2="230"
-                    y2={100 + i * 45}
-                    stroke="#E5E7EB"
-                    strokeWidth="0.5"
-                    opacity="0.5"
-                  />
-                ))}
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <line
-                    key={`v-${i}`}
-                    x1={100 + i * 18}
-                    y1="50"
-                    x2={100 + i * 18}
-                    y2="750"
-                    stroke="#E5E7EB"
-                    strokeWidth="0.5"
-                    opacity="0.5"
-                  />
-                ))}
-                
-                {/* Central Park */}
-                <rect
-                  x="115"
-                  y="200"
-                  width="80"
-                  height="150"
-                  fill="#A7E8B1"
-                  opacity="0.4"
-                  rx="5"
-                />
-                <text
-                  x="155"
-                  y="280"
-                  textAnchor="middle"
-                  fontSize="9"
-                  fill="#059669"
-                  fontWeight="600"
+          {/* Google Maps Container */}
+          <div className="relative rounded-xl overflow-hidden border-2 border-gray-200" style={{ height: '600px' }}>
+            {googleMapsApiKey ? (
+              <LoadScript
+                googleMapsApiKey={googleMapsApiKey}
+                libraries={['visualization']}
+                onLoad={onLoadScriptLoad}
+              >
+                <GoogleMap
+                  mapContainerStyle={{ width: '100%', height: '100%' }}
+                  center={mapCenter}
+                  zoom={12}
+                  options={{
+                    styles: mapStyles,
+                    disableDefaultUI: false,
+                    zoomControl: true,
+                    streetViewControl: false,
+                    mapTypeControl: false,
+                    fullscreenControl: true,
+                  }}
+                  onLoad={onMapLoad}
+                  onUnmount={onMapUnmount}
                 >
-                  Central Park
-                </text>
-                
-                {/* Heat Map Data Points */}
-                {locations.map((location) => {
-                  // Convert lat/lng to SVG coordinates (simplified projection)
-                  const x = 100 + ((location.lng + 74.02) * 2000);
-                  const y = 750 - ((location.lat - 40.70) * 4000);
-                  
-                  const value = location[selectedMetric];
-                  const color = getColorForValue(value);
-                  const isHovered = hoveredLocation === location.id;
-                  
-                  return (
-                    <g key={location.id}>
-                      {/* Heat circle gradient */}
-                      <circle
-                        cx={x}
-                        cy={y}
-                        r={isHovered ? 50 : 40}
-                        fill={color}
-                        opacity="0.5"
-                        className="transition-all duration-200"
-                      />
-                      
-                      {/* Data point marker */}
-                      <circle
-                        cx={x}
-                        cy={y}
-                        r={isHovered ? 12 : 10}
-                        fill="white"
-                        stroke={color}
-                        strokeWidth="3"
-                        className="cursor-pointer transition-all duration-200"
-                        onMouseEnter={() => setHoveredLocation(location.id)}
-                        onMouseLeave={() => setHoveredLocation(null)}
-                      />
-                      
-                      {/* Value label */}
-                      <text
-                        x={x}
-                        y={y + 5}
-                        textAnchor="middle"
-                        fontSize={isHovered ? "13" : "11"}
-                        fontWeight="bold"
-                        fill="#1F2937"
-                        className="pointer-events-none transition-all duration-200"
-                      >
-                        {value}
-                      </text>
-                      
-                      {/* Location label on hover */}
-                      {isHovered && (
-                        <g>
-                          <rect
-                            x={x - 60}
-                            y={y - 45}
-                            width="120"
-                            height="28"
-                            fill="white"
-                            stroke={color}
-                            strokeWidth="2"
-                            rx="6"
-                            className="animate-fade-in"
-                          />
-                          <text
-                            x={x}
-                            y={y - 32}
-                            textAnchor="middle"
-                            fontSize="11"
-                            fontWeight="600"
-                            fill="#1F2937"
-                          >
-                            {location.name}
-                          </text>
-                          <text
-                            x={x}
-                            y={y - 20}
-                            textAnchor="middle"
-                            fontSize="10"
-                            fill="#6B7280"
-                          >
-                            {value} {metricThemes[selectedMetric].unit}
-                          </text>
-                        </g>
-                      )}
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-            
-            {/* Map Legend */}
-            <div className="absolute bottom-4 left-4 bg-white rounded-lg p-4 shadow-lg border border-gray-200">
-              <p className="text-xs font-semibold text-gray-700 mb-2">Air Quality Index</p>
-              <div className="space-y-1">
-                {AQI_RANGES.pm25.slice(0, 4).map((range, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <div 
-                      className="w-6 h-3 rounded"
-                      style={{ backgroundColor: range.color }}
+                  {isLoaded && heatmapData.length > 0 && (
+                    <HeatmapLayer
+                      data={heatmapData}
+                      options={heatmapOptions}
                     />
-                    <span className="text-xs text-gray-600">{range.label}</span>
-                  </div>
-                ))}
+                  )}
+                </GoogleMap>
+              </LoadScript>
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-gray-100">
+                <div className="text-center p-6">
+                  <p className="text-lg font-semibold text-gray-700 mb-2">Google Maps API Key Required</p>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Please set REACT_APP_GOOGLE_MAPS_API_KEY in your .env file
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Get your API key from{' '}
+                    <a 
+                      href="https://console.cloud.google.com/google/maps-apis" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-700 underline"
+                    >
+                      Google Cloud Console
+                    </a>
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
             
-            {/* Scale indicator */}
-            <div className="absolute bottom-4 right-4 bg-white rounded-lg px-3 py-2 shadow-lg border border-gray-200">
-              <p className="text-xs font-semibold text-gray-700">Zoom: {Math.round(zoomLevel * 100)}%</p>
+            {/* Map Legend - Continuous Gradient */}
+            <div className="absolute bottom-4 left-4 bg-white rounded-lg p-5 shadow-lg border border-gray-200 z-10 min-w-[280px]">
+              <p className="text-sm font-semibold text-gray-700 mb-3">Air Quality Gradient</p>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-64 h-5 rounded overflow-hidden" style={{
+                  background: `linear-gradient(to right, ${heatmapGradient.slice(1).join(', ')})`
+                }} />
+              </div>
+              <div className="flex justify-between text-xs text-gray-600 mb-2">
+                <span className="whitespace-nowrap">Good</span>
+                <span className="whitespace-nowrap">Moderate</span>
+                <span className="whitespace-nowrap">Unhealthy</span>
+                <span className="whitespace-nowrap">Very Unhealthy</span>
+              </div>
+              <p className="text-xs text-gray-500 italic">Weighted by AQI value</p>
             </div>
           </div>
           
           <p className="text-xs text-gray-500 mt-4 text-center">
-            * Click and drag to pan • Use zoom controls to explore • Hover over points for details
+            * Real geography with anonymized sensor locations • Hover over heat zones for details
           </p>
         </div>
 
@@ -486,6 +536,8 @@ const HeatMapDashboard = ({ selectedMetric, setSelectedMetric, filters, setFilte
           </div>
         </div>
       </div>
+      </div>
+      {/* End Screenshot Container */}
 
       {/* Status Info Modal */}
       <StatusInfoModal 
